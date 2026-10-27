@@ -1,0 +1,278 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         String    // SUPER_ADMIN | FINANCE_OFFICER | VERIFIER | APPROVING_AUTHORITY | INSTITUTION_USER | AUDITOR
+  name         String
+  phone        String?
+  institutionId String?  // Only for INSTITUTION_USER
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  institution          Institution?           @relation(fields: [institutionId], references: [id])
+  refreshTokens        RefreshToken[]
+  notifications        Notification[]
+  notificationPrefs    NotificationPreference[]
+  auditLogs            AuditLog[]
+  createdFdrs          Fdr[]                  @relation("FdrCreator")
+  uploadedDocuments    Document[]             @relation("DocumentUploader")
+  verifiedDocuments    Document[]             @relation("DocumentVerifier")
+  releaseSteps         ReleaseStep[]
+  createdReleaseReqs   ReleaseRequest[]
+
+  @@index([email])
+  @@index([role])
+  @@index([institutionId])
+}
+
+model RefreshToken {
+  id                 String    @id @default(cuid())
+  userId             String
+  tokenHash          String    @unique
+  expiresAt          DateTime
+  isRevoked          Boolean   @default(false)
+  replacedByTokenHash String?
+  ipAddress          String?
+  userAgent          String?
+  createdAt          DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model Institution {
+  id              String    @id @default(cuid())
+  aicteId         String    @unique
+  name            String
+  type            String    // Engineering | Management | Pharmacy | Architecture | MCA | MBA | Hotel Management | Other
+  state           String
+  city            String
+  headName        String
+  headEmail       String
+  phone           String
+  approvalStatus  String    @default("APPROVED") // APPROVED | PENDING | SUSPENDED
+  hasPendingDues  Boolean   @default(false)
+  pendingDuesNote String?
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  users User[]
+  fdrs  Fdr[]
+
+  @@index([state])
+  @@index([type])
+  @@index([approvalStatus])
+}
+
+model Bank {
+  id        String   @id @default(cuid())
+  name      String
+  shortCode String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  fdrs Fdr[]
+
+  @@index([shortCode])
+}
+
+model Fdr {
+  id              String    @id @default(cuid())
+  fdrNumber       String    @unique
+  institutionId   String
+  bankId          String
+  branch          String
+  ifsc            String
+  principal       BigInt    // in paise
+  interestRate    Float
+  interestType    String    // CUMULATIVE | QUARTERLY_PAYOUT
+  issueDate       DateTime
+  tenureMonths    Int
+  maturityDate    DateTime
+  maturityAmount  BigInt    // in paise
+  quarterlyPayout BigInt    @default(0) // in paise, only for QUARTERLY_PAYOUT
+  lienMarked      Boolean   @default(false)
+  purpose         String    // APPROVAL_PROCESS_FEE | SECURITY_DEPOSIT | PERFORMANCE_GUARANTEE | OTHER
+  academicYear    String    // e.g. "2024-25"
+  remarks         String?
+  status          String    @default("ACTIVE") // ACTIVE | NEAR_MATURITY | MATURED | RENEWED | RELEASE_REQUESTED | RELEASED | CLOSED | ENCASHED
+  parentFdrId     String?   // for renewal chain
+  createdById     String
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  institution     Institution    @relation(fields: [institutionId], references: [id])
+  bank            Bank           @relation(fields: [bankId], references: [id])
+  createdBy       User           @relation("FdrCreator", fields: [createdById], references: [id])
+  parentFdr       Fdr?           @relation("FdrRenewal", fields: [parentFdrId], references: [id])
+  renewedAs       Fdr[]          @relation("FdrRenewal")
+  documents       Document[]
+  alertLogs       AlertLog[]
+  releaseRequests ReleaseRequest[]
+
+  @@index([institutionId])
+  @@index([bankId])
+  @@index([maturityDate])
+  @@index([status])
+  @@index([parentFdrId])
+}
+
+model Document {
+  id                  String    @id @default(cuid())
+  fdrId               String
+  documentType        String    // FDR_SCAN | BANK_CONFIRMATION | LIEN_LETTER | UNDERTAKING | NOC | ID_PROOF | OTHER
+  fileName            String    // stored safe name (uuid.ext)
+  originalName        String    // original filename for display
+  mimeType            String
+  filePath            String
+  fileSize            Int       // in bytes
+  version             Int       @default(1)
+  verificationStatus  String    @default("PENDING") // PENDING | VERIFIED | REJECTED
+  verifiedById        String?
+  verificationRemarks String?
+  verifiedAt          DateTime?
+  uploadedById        String
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+
+  fdr        Fdr   @relation(fields: [fdrId], references: [id])
+  verifiedBy User? @relation("DocumentVerifier", fields: [verifiedById], references: [id])
+  uploadedBy User  @relation("DocumentUploader", fields: [uploadedById], references: [id])
+
+  @@index([fdrId])
+  @@index([documentType])
+  @@index([verificationStatus])
+}
+
+model ReleaseRequest {
+  id               String    @id @default(cuid())
+  fdrId            String
+  referenceNumber  String    @unique
+  status           String    @default("DRAFT") // DRAFT | SUBMITTED | VERIFIED | APPROVED | RELEASED
+  prematureRelease Boolean   @default(false)
+  prematureReason  String?
+  releaseDate      DateTime?
+  utr              String?   // UTR number for bank transfer
+  releasedAmount   BigInt?   // in paise
+  deductions       BigInt    @default(0) // in paise
+  deductionReason  String?
+  pdfPath          String?
+  createdById      String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  fdr       Fdr           @relation(fields: [fdrId], references: [id])
+  createdBy User          @relation(fields: [createdById], references: [id])
+  steps     ReleaseStep[]
+
+  @@index([fdrId])
+  @@index([status])
+}
+
+model ReleaseStep {
+  id               String   @id @default(cuid())
+  releaseRequestId String
+  actorId          String
+  actorRole        String
+  action           String   // CREATED | SUBMITTED | VERIFIED | REJECTED | APPROVED | RELEASED
+  remarks          String?
+  createdAt        DateTime @default(now())
+
+  releaseRequest ReleaseRequest @relation(fields: [releaseRequestId], references: [id])
+  actor          User           @relation(fields: [actorId], references: [id])
+
+  @@index([releaseRequestId])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  body        String
+  type        String   // MATURITY_ALERT | DOCUMENT_PENDING | RELEASE_STATUS | SYSTEM
+  entityType  String?  // FDR | RELEASE_REQUEST | DOCUMENT
+  entityId    String?
+  isRead      Boolean  @default(false)
+  emailStatus String   @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model NotificationPreference {
+  id               String  @id @default(cuid())
+  userId           String
+  notificationType String  // MATURITY_ALERT | DOCUMENT_PENDING | RELEASE_STATUS | SYSTEM
+  inApp            Boolean @default(true)
+  email            Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, notificationType])
+}
+
+model AlertLog {
+  id         String   @id @default(cuid())
+  fdrId      String
+  alertType  String   // DAYS_90 | DAYS_60 | DAYS_30 | DAYS_15 | DAYS_7 | DAYS_1 | MATURITY_DAY | OVERDUE_7
+  targetDate DateTime // the maturity date that triggered this
+  sentAt     DateTime @default(now())
+
+  fdr Fdr @relation(fields: [fdrId], references: [id])
+
+  @@unique([fdrId, alertType, targetDate])
+  @@index([fdrId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String   // CREATE | UPDATE | DELETE | LOGIN | LOGOUT | LOGIN_FAILED | VERIFY | APPROVE | REJECT | RELEASE
+  entity    String   // User | Institution | Bank | Fdr | Document | ReleaseRequest | etc.
+  entityId  String?
+  oldValue  String?  // JSON string
+  newValue  String?  // JSON string
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entity])
+  @@index([entityId])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+}
